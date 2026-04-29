@@ -1,0 +1,22 @@
+diff -ruw libvpx-1.13.0/vpx_ports/vpx_ports.mk libvpx-1.13.0-new/vpx_ports/vpx_ports.mk
+--- libvpx-1.13.0/vpx_ports/vpx_ports.mk	2023-02-07 20:33:51.000000000 -0500
++++ libvpx-1.13.0-new/vpx_ports/vpx_ports.mk	2023-03-24 11:42:44.133675374 -0400
+@@ -37,6 +37,7 @@
+ endif
+ 
+ PORTS_SRCS-$(VPX_ARCH_ARM) += arm_cpudetect.c
++PORTS_SRCS-$(VPX_ARCH_ARM) += cpu-features.c
+ PORTS_SRCS-$(VPX_ARCH_ARM) += arm.h
+ 
+ PORTS_SRCS-$(VPX_ARCH_PPC) += ppc_cpudetect.c
+diff -ruw libvpx-1.13.0/vpx_ports/x86_abi_support.asm libvpx-1.13.0-new/vpx_ports/x86_abi_support.asm
+--- libvpx-1.13.0/vpx_ports/x86_abi_support.asm	2023-03-24 11:46:57.104724909 -0400
++++ libvpx-1.13.0-new/vpx_ports/x86_abi_support.asm	2023-03-24 11:47:48.824529092 -0400
+@@ -414,6 +414,7 @@
+ 
+ ; On Android platforms use lrand48 when building postproc routines. Prior to L
+ ; rand() was not available.
++%define __ANDROID__
+ %if CONFIG_POSTPROC=1 || CONFIG_VP9_POSTPROC=1
+ %ifdef __ANDROID__
+ extern sym(lrand48)
