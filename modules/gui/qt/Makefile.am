@@ -13,8 +13,10 @@ SUFFIXES += .ui .h .hpp .moc.cpp
 
 libqt_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) \
 	-I$(srcdir)/gui/qt -I$(builddir)/gui/qt
-libqt_plugin_la_CXXFLAGS = $(AM_CXXFLAGS) $(QT_CFLAGS) $(CXXFLAGS_qt)
-libqt_plugin_la_LIBADD = $(QT_LIBS) $(LIBS_qt) $(LIBM)
+libqt_plugin_la_CXXFLAGS = $(AM_CXXFLAGS) $(QT_CFLAGS) $(CXXFLAGS_qt) \
+	$(AVFORMAT_CFLAGS) $(AVCODEC_CFLAGS) $(AVUTIL_CFLAGS) $(SWSCALE_CFLAGS)
+libqt_plugin_la_LIBADD = $(QT_LIBS) $(LIBS_qt) $(LIBM) \
+	$(AVFORMAT_LIBS) $(AVCODEC_LIBS) $(AVUTIL_LIBS) $(SWSCALE_LIBS)
 libqt_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(guidir)'
 if HAVE_DARWIN
 libqt_plugin_la_LDFLAGS += -Wl,-framework,Cocoa
@@ -126,6 +128,7 @@ libqt_plugin_la_SOURCES = \
 	gui/qt/util/input_slider.cpp gui/qt/util/input_slider.hpp \
 	gui/qt/util/timetooltip.cpp gui/qt/util/timetooltip.hpp \
 	gui/qt/util/thumbnail_provider.cpp gui/qt/util/thumbnail_provider.hpp \
+	gui/qt/util/playlist_thumbnail_manager.cpp gui/qt/util/playlist_thumbnail_manager.hpp \
 	gui/qt/util/customwidgets.cpp gui/qt/util/customwidgets.hpp \
 	gui/qt/util/searchlineedit.cpp gui/qt/util/searchlineedit.hpp \
 	gui/qt/util/registry.cpp gui/qt/util/registry.hpp \
@@ -222,6 +225,7 @@ nodist_libqt_plugin_la_SOURCES = \
 	gui/qt/util/input_slider.moc.cpp \
 	gui/qt/util/timetooltip.moc.cpp \
 	gui/qt/util/thumbnail_provider.moc.cpp \
+	gui/qt/util/playlist_thumbnail_manager.moc.cpp \
 	gui/qt/util/customwidgets.moc.cpp \
 	gui/qt/util/searchlineedit.moc.cpp \
 	gui/qt/util/qmenuview.moc.cpp \

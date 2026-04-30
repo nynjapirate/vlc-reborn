@@ -33,9 +33,18 @@ class TimeTooltip : public QWidget
     Q_OBJECT
 public:
     explicit TimeTooltip( QWidget *parent = 0 );
+    /* Atomic state update. Target, time, text, and thumbnail are all
+     * applied together in a single adjustPosition() pass — there is no
+     * intermediate state where, e.g., the widget has resized for a new
+     * thumbnail but the target position hasn't yet been re-derived.
+     * That intermediate state is what produced the "phantom thumbnail
+     * lower-right of cursor" artifact on fast scrubs. */
+    void setTip( const QPoint& pos, const QString& time, const QString& text,
+                 const QImage& thumbnail );
+    /* Convenience overloads — both funnel through the 4-arg setTip with
+     * the current cached thumbnail/target/time/text, so every caller
+     * lands in the same single state-mutation path. */
     void setTip( const QPoint& pos, const QString& time, const QString& text );
-    /* Optional preview frame painted above the text. Pass a null QImage
-     * (or call clearThumbnail) to hide it. The tooltip resizes to fit. */
     void setThumbnail( const QImage& img );
     void clearThumbnail();
     virtual void show();
@@ -44,6 +53,8 @@ protected:
     void paintEvent( QPaintEvent * ) Q_DECL_OVERRIDE;
 
 private:
+    void applyState( const QPoint& target, const QString& time,
+                     const QString& text, const QImage& thumbnail );
     void adjustPosition();
     void buildPath();
     QPoint mTarget;

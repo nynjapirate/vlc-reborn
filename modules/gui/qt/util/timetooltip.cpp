@@ -133,43 +133,48 @@ void TimeTooltip::buildPath()
     mPainterPath = mPainterPath.simplified();
 }
 
-void TimeTooltip::setTip( const QPoint& target, const QString& time, const QString& text )
+void TimeTooltip::applyState( const QPoint& target, const QString& time,
+                              const QString& text, const QImage& thumbnail )
 {
+    /* Single chokepoint for every state mutation. mTarget, mTime, mText,
+     * and mThumbnail change together, then adjustPosition + update run
+     * over a coherent snapshot. No path can resize for a new thumbnail
+     * while the target is still the previous one, or vice versa.        */
     mDisplayedText = time;
     if ( !text.isEmpty() )
         mDisplayedText.append( " - " ).append( text );
 
-    if( mTarget != target || time.length() != mTime.length() || mText != text )
-    {
-        mTarget = target;
-        mTime = time;
-        mText = text;
-        adjustPosition();
-    }
+    mTarget = target;
+    mTime = time;
+    mText = text;
+    mThumbnail = thumbnail;
 
+    adjustPosition();
     update();
     raise();
 }
 
+void TimeTooltip::setTip( const QPoint& target, const QString& time,
+                          const QString& text, const QImage& thumbnail )
+{
+    applyState( target, time, text, thumbnail );
+}
+
+void TimeTooltip::setTip( const QPoint& target, const QString& time, const QString& text )
+{
+    applyState( target, time, text, mThumbnail );
+}
+
 void TimeTooltip::setThumbnail( const QImage& img )
 {
-    if ( img.isNull() )
-    {
-        clearThumbnail();
-        return;
-    }
-    mThumbnail = img;
-    adjustPosition();
-    update();
+    applyState( mTarget, mTime, mText, img );
 }
 
 void TimeTooltip::clearThumbnail()
 {
     if ( mThumbnail.isNull() )
         return;
-    mThumbnail = QImage();
-    adjustPosition();
-    update();
+    applyState( mTarget, mTime, mText, QImage() );
 }
 
 void TimeTooltip::show()

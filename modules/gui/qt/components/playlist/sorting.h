@@ -26,6 +26,9 @@
 
 #include <vlc_media_library.h>
 #include <vlc_input_item.h>
+#include <vlc_url.h>
+
+#include <sys/stat.h>
 
 /* You can use these numbers with | and & to determine what you want to show */
 enum
@@ -43,10 +46,11 @@ enum
     COLUMN_COVER          = 0x0400,
     COLUMN_DISC_NUMBER    = 0x0800,
     COLUMN_DATE           = 0x1000,
+    COLUMN_SIZE           = 0x2000,
 
     /* Add new entries here and update the COLUMN_END value*/
 
-    COLUMN_END            = 0x2000
+    COLUMN_END            = 0x4000
 };
 
 #define COLUMN_DEFAULT (COLUMN_TITLE|COLUMN_DURATION|COLUMN_ALBUM)
@@ -64,11 +68,12 @@ static inline const char * psz_column_title( uint32_t i_column )
     case COLUMN_ALBUM:           return VLC_META_ALBUM;
     case COLUMN_TRACK_NUMBER:    return VLC_META_TRACK_NUMBER;
     case COLUMN_DESCRIPTION:     return VLC_META_DESCRIPTION;
-    case COLUMN_URI:             return _("URI");
+    case COLUMN_URI:             return _("Location");
     case COLUMN_RATING:          return VLC_META_RATING;
     case COLUMN_COVER:           return _("Cover");
     case COLUMN_DISC_NUMBER:     return VLC_META_DISCNUMBER;
     case COLUMN_DATE:            return VLC_META_DATE;
+    case COLUMN_SIZE:            return _("Size");
     default: abort();
     }
 }
@@ -101,7 +106,20 @@ static inline char * psz_column_meta( input_item_t *p_item, uint32_t i_column )
     case COLUMN_DESCRIPTION:
         return input_item_GetDescription( p_item );
     case COLUMN_URI:
-        return input_item_GetURI( p_item );
+    {
+        /* Display a human-readable path, not the raw percent-encoded
+         * URI. For local files (file://...) vlc_uri2path strips the
+         * scheme and decodes percent escapes. For other schemes
+         * (http://, smb://, ...) we just decode percent escapes so
+         * "file%20with%20spaces" becomes "file with spaces".         */
+        char *uri = input_item_GetURI( p_item );
+        if( !uri ) return NULL;
+        char *path = vlc_uri2path( uri );
+        if( path ) { free( uri ); return path; }
+        char *decoded = vlc_uri_decode_duplicate( uri );
+        free( uri );
+        return decoded ? decoded : strdup( "" );
+    }
     case COLUMN_RATING:
         return input_item_GetRating( p_item );
     case COLUMN_COVER:
@@ -110,6 +128,36 @@ static inline char * psz_column_meta( input_item_t *p_item, uint32_t i_column )
         return input_item_GetDiscNumber( p_item );
     case COLUMN_DATE:
         return input_item_GetDate( p_item );
+    case COLUMN_SIZE:
+    {
+        /* Size on disk for local files. Network/remote items have no
+         * meaningful local size — return NULL (cell stays blank). */
+        char *uri = input_item_GetURI( p_item );
+        if( !uri ) return NULL;
+        char *path = vlc_uri2path( uri );
+        free( uri );
+        if( !path ) return NULL;
+        struct stat st;
+        int rc = stat( path, &st );
+        free( path );
+        if( rc != 0 ) return NULL;
+
+        /* Human-readable formatting; matches the convention most file
+         * managers use (KB/MB/GB powers of 1024). */
+        long long b = (long long) st.st_size;
+        char buf[32];
+        if( b >= 1024LL * 1024 * 1024 )
+            snprintf( buf, sizeof buf, "%.2f GB",
+                      (double) b / (1024.0 * 1024.0 * 1024.0) );
+        else if( b >= 1024LL * 1024 )
+            snprintf( buf, sizeof buf, "%.1f MB",
+                      (double) b / (1024.0 * 1024.0) );
+        else if( b >= 1024 )
+            snprintf( buf, sizeof buf, "%.0f KB", (double) b / 1024.0 );
+        else
+            snprintf( buf, sizeof buf, "%lld B", b );
+        return strdup( buf );
+    }
     default:
         abort();
     }
@@ -132,6 +180,7 @@ static inline int i_column_sorting( uint32_t i_column )
     case COLUMN_RATING:         return SORT_RATING;
     case COLUMN_DISC_NUMBER:    return SORT_DISC_NUMBER;
     case COLUMN_DATE:           return SORT_DATE;
+    case COLUMN_SIZE:           return SORT_SIZE;
     default: abort();
     }
 }
@@ -154,6 +203,7 @@ static inline ml_select_e meta_to_mlmeta( uint32_t i_column )
     case COLUMN_COVER:          return ML_COVER;
     case COLUMN_DISC_NUMBER:    return ML_DISC_NUMBER;
     case COLUMN_DATE:           return ML_YEAR;
+    case COLUMN_SIZE:           return ML_TITLE;    /* no ML_SIZE */
     default: abort();
     }
 }

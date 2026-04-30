@@ -1,5 +1,15 @@
 .claude/
 *~
+
+# vlc-reborn packaging artifacts (re-buildable from source via the
+# package-appimage.sh / package-deb.sh scripts; uploaded to GitHub
+# Releases rather than tracked in git).
+.appimage-tools/
+vlc-reborn.AppDir/
+vlc-reborn-pkg/
+VLC_Reborn-*.AppImage
+vlc-reborn*.deb
+
 *.app
 *.cache
 *.dylib

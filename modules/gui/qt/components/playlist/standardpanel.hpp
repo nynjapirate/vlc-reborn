@@ -65,6 +65,7 @@ public:
            TREE_VIEW ,
            LIST_VIEW,
            PICTUREFLOW_VIEW,
+           THUMBNAIL_VIEW,
            VIEW_COUNT };
 
     int currentViewIndex() const;
@@ -82,6 +83,9 @@ private:
     PLSelector  *p_selector;
 
     QTreeView         *treeView;
+    QTreeView         *thumbView;       /* THUMBNAIL_VIEW: same model as
+                                         * treeView, but title column has a
+                                         * thumbnail-painting delegate. */
     PlIconView        *iconView;
     PlListView        *listView;
     PicFlowView       *picFlowView;
@@ -99,6 +103,7 @@ private:
     void createIconView();
     void createListView();
     void createCoverView();
+    void createThumbnailView();
     void updateZoom( int i_zoom );
     virtual bool eventFilter ( QObject * watched, QEvent * event ) Q_DECL_OVERRIDE;
 
@@ -143,6 +148,7 @@ static const QString viewNames[ StandardPLPanel::VIEW_COUNT ]
                                 = { qtr( "Icons" ),
                                     qtr( "Detailed List" ),
                                     qtr( "List" ),
-                                    qtr( "PictureFlow") };
+                                    qtr( "PictureFlow"),
+                                    qtr( "Thumbnail List" ) };
 
 #endif

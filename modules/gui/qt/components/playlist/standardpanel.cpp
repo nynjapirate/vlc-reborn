@@ -70,6 +70,8 @@
 #include <QDesktopServices>
 #include <QUrl>
 #include <QFont>
+#include <QProxyStyle>
+#include <QScrollBar>
 
 #include <assert.h>
 
@@ -77,6 +79,43 @@
 
 /* local helper */
 inline QModelIndex popupIndex( QAbstractItemView *view );
+
+/* QProxyStyle override that turns on jump-to-click on scrollbars: a
+ * left-click on the trough sets the slider's value to the clicked
+ * position, instead of paging by one screen height. The standard
+ * QStyle hint is SH_ScrollBar_LeftClickAbsolutePosition; most native
+ * styles return 0 for it, which yields the page-step behavior. */
+class JumpScrollStyle : public QProxyStyle
+{
+public:
+    explicit JumpScrollStyle( QStyle *base = nullptr ) : QProxyStyle( base ) {}
+    int styleHint( QStyle::StyleHint hint, const QStyleOption *opt,
+                   const QWidget *w, QStyleHintReturn *retData ) const override
+    {
+        if ( hint == QStyle::SH_ScrollBar_LeftClickAbsolutePosition )
+            return 1;
+        return QProxyStyle::styleHint( hint, opt, w, retData );
+    }
+};
+
+/* Apply the jump-to-click style to a view's scrollbars. The proxy
+ * style is parented to the scrollbar so it follows its lifetime. */
+static void applyJumpScrollStyle( QAbstractItemView *view )
+{
+    if ( !view ) return;
+    if ( QScrollBar *sb = view->verticalScrollBar() )
+    {
+        JumpScrollStyle *jss = new JumpScrollStyle( sb->style() );
+        jss->setParent( sb );
+        sb->setStyle( jss );
+    }
+    if ( QScrollBar *sb = view->horizontalScrollBar() )
+    {
+        JumpScrollStyle *jss = new JumpScrollStyle( sb->style() );
+        jss->setParent( sb );
+        sb->setStyle( jss );
+    }
+}
 
 StandardPLPanel::StandardPLPanel( PlaylistWidget *_parent,
                                   intf_thread_t *_p_intf,
@@ -94,8 +133,17 @@ StandardPLPanel::StandardPLPanel( PlaylistWidget *_parent,
 
     iconView    = NULL;
     treeView    = NULL;
+    thumbView   = NULL;
     listView    = NULL;
     picFlowView = NULL;
+
+    /* Created up front (instead of inside createTreeView) so any
+     * tree-style view can use it on first show — including when the
+     * user's saved view-mode is Thumbnail List and treeView never
+     * gets built before the header-menu popup. */
+    selectColumnsSigMapper = new QSignalMapper( this );
+    CONNECT( selectColumnsSigMapper, mapped( int ),
+             this, toggleColumnShown( int ) );
 
     currentRootIndexPLId  = -1;
     lastActivatedPLItemId     = -1;
@@ -132,6 +180,12 @@ StandardPLPanel::~StandardPLPanel()
     getSettings()->beginGroup("Playlist");
     if( treeView )
         getSettings()->setValue( "headerStateV2", treeView->header()->saveState() );
+    /* Thumbnail List view has its own independent column state — column
+     * widths there are typically wider (the title column needs room for
+     * the thumbnail) and users likely want different visibility, so we
+     * keep the two persisted states separate. */
+    if( thumbView )
+        getSettings()->setValue( "thumbHeaderStateV2", thumbView->header()->saveState() );
     getSettings()->setValue( "view-mode", currentViewIndex() );
     getSettings()->setValue( "zoom",
                 model->data( QModelIndex(), Qt::FontRole ).value<QFont>().pointSize()
@@ -254,7 +308,7 @@ bool StandardPLPanel::popup( const QPoint &point )
         QMenu *sortingMenu = new QMenu( qtr( "Sort by" ), &menu );
         /* Choose what columns to show in sorting menu, not sure if this should be configurable*/
         QList<int> sortingColumns;
-        sortingColumns << COLUMN_TITLE << COLUMN_ARTIST << COLUMN_ALBUM << COLUMN_TRACK_NUMBER << COLUMN_URI << COLUMN_DISC_NUMBER;
+        sortingColumns << COLUMN_TITLE << COLUMN_ARTIST << COLUMN_ALBUM << COLUMN_TRACK_NUMBER << COLUMN_URI << COLUMN_DISC_NUMBER << COLUMN_SIZE;
         container.action = VLCModelSubInterface::ACTION_SORT;
         foreach( int Column, sortingColumns )
         {
@@ -284,6 +338,34 @@ bool StandardPLPanel::popup( const QPoint &point )
 
     menu.addMenu( StandardPLPanel::viewSelectionMenu( this ) );
 
+    /* Thumbnail-size submenu — only relevant in the Thumbnail List view.
+     * Actions are tagged with a "plThumbWidth" property so popupAction
+     * can identify and handle them without misinterpreting the QVariant
+     * data as a model action. */
+    if ( currentView == thumbView )
+    {
+        QMenu *sizeMenu = new QMenu( qtr( "Thumbnail size" ), &menu );
+        const int currentWidth = static_cast<int>(
+            var_InheritInteger( p_intf, "qt-pl-thumb-width" ) );
+        struct { const char *label; int width; } sizes[] = {
+            { "Small (120 px)",  120 },
+            { "Medium (160 px)", 160 },
+            { "Large (240 px)",  240 },
+            { "XL (320 px)",     320 },
+            { "XXL (480 px)",    480 },
+        };
+        QActionGroup *grp = new QActionGroup( &menu );
+        for ( const auto &s : sizes )
+        {
+            QAction *a = sizeMenu->addAction( qtr( s.label ) );
+            a->setCheckable( true );
+            a->setChecked( currentWidth == s.width );
+            a->setProperty( "plThumbWidth", s.width );
+            grp->addAction( a );
+        }
+        menu.addMenu( sizeMenu );
+    }
+
     /* Display and forward the result */
     if( !menu.isEmpty() )
     {
@@ -296,6 +378,36 @@ bool StandardPLPanel::popup( const QPoint &point )
 
 void StandardPLPanel::popupAction( QAction *action )
 {
+    /* Intercept the Thumbnail List size-picker before falling through
+     * to the model-action dispatcher: those actions don't carry an
+     * actionsContainerType in their data and would be misinterpreted. */
+    {
+        QVariant marker = action->property( "plThumbWidth" );
+        if ( marker.isValid() )
+        {
+            int w = marker.toInt();
+            if ( w >= 80 && w <= 480 )
+            {
+                var_SetInteger( p_intf->obj.libvlc, "qt-pl-thumb-width", w );
+                config_PutInt( p_intf, "qt-pl-thumb-width", w );
+
+                /* Cached thumbnails are at the old width; the manager
+                 * invalidates on width-change automatically on the next
+                 * requestAsync. We force a layout pass so row heights
+                 * are recomputed via the delegate's sizeHint(). */
+                if ( thumbView )
+                {
+                    thumbView->header()->resizeSection(
+                        VLCModel::metaToColumn( COLUMN_TITLE ),
+                        w + 220 );
+                    thumbView->doItemsLayout();
+                    thumbView->viewport()->update();
+                }
+            }
+            return;
+        }
+    }
+
     VLCModel *model = qobject_cast<VLCModel *>(currentView->model());
     VLCModelSubInterface::actionsContainerType a =
             action->data().value<VLCModelSubInterface::actionsContainerType>();
@@ -441,7 +553,13 @@ inline QModelIndex popupIndex( QAbstractItemView *view )
 void StandardPLPanel::popupSelectColumn( QPoint )
 {
     QMenu menu;
-    assert( treeView );
+    /* Both tree-style views (Detailed List + Thumbnail List) support
+     * column hiding through this header context menu. The active
+     * view's current visibility decides each entry's checked state.
+     * Trigger always re-routes through toggleColumnShown which then
+     * applies to whichever tree-style view is current. */
+    QTreeView *target = ( currentView == thumbView ) ? thumbView : treeView;
+    if ( !target ) return;
 
     /* We do not offer the option to hide index 0 column, or
      * QTreeView will behave weird */
@@ -449,7 +567,7 @@ void StandardPLPanel::popupSelectColumn( QPoint )
     {
         QAction* option = menu.addAction( qfu( psz_column_title( i ) ) );
         option->setCheckable( true );
-        option->setChecked( !treeView->isColumnHidden( j ) );
+        option->setChecked( !target->isColumnHidden( j ) );
         selectColumnsSigMapper->setMapping( option, j );
         CONNECT( option, triggered(), selectColumnsSigMapper, map() );
     }
@@ -458,7 +576,9 @@ void StandardPLPanel::popupSelectColumn( QPoint )
 
 void StandardPLPanel::toggleColumnShown( int i )
 {
-    treeView->setColumnHidden( i, !treeView->isColumnHidden( i ) );
+    QTreeView *target = ( currentView == thumbView ) ? thumbView : treeView;
+    if ( !target ) return;
+    target->setColumnHidden( i, !target->isColumnHidden( i ) );
 }
 
 /* Search in the playlist */
@@ -529,7 +649,11 @@ void StandardPLPanel::browseInto( const QModelIndex &index )
 
 void StandardPLPanel::browseInto()
 {
-    browseInto( (currentRootIndexPLId != -1 && currentView != treeView) ?
+    /* The two tree-style views (treeView, thumbView) show the full
+     * playlist hierarchy; the flat views (icon/list/picflow) need to
+     * be reseated at the saved root id. */
+    bool isTree = ( currentView == treeView || currentView == thumbView );
+    browseInto( (currentRootIndexPLId != -1 && !isTree) ?
                  model->indexByPLID( currentRootIndexPLId, 0 ) :
                  QModelIndex() );
 }
@@ -628,6 +752,7 @@ void StandardPLPanel::createIconView()
              this, activate( const QModelIndex & ) );
     iconView->installEventFilter( this );
     iconView->viewport()->installEventFilter( this );
+    applyJumpScrollStyle( iconView );
     viewStack->addWidget( iconView );
 }
 
@@ -641,6 +766,7 @@ void StandardPLPanel::createListView()
              this, activate( const QModelIndex & ) );
     listView->installEventFilter( this );
     listView->viewport()->installEventFilter( this );
+    applyJumpScrollStyle( listView );
     viewStack->addWidget( listView );
 }
 
@@ -654,6 +780,79 @@ void StandardPLPanel::createCoverView()
              this, activate( const QModelIndex & ) );
     viewStack->addWidget( picFlowView );
     picFlowView->installEventFilter( this );
+}
+
+void StandardPLPanel::createThumbnailView()
+{
+    /* Same widget class as the Detailed List, just with a custom
+     * delegate on column 0 that paints a video thumbnail to the left
+     * of the title text. The remaining columns reuse the standard
+     * PlTreeView delegate set in the PlTreeView ctor. */
+    thumbView = new PlTreeView( model, this );
+
+    CONNECT( thumbView, activated( const QModelIndex& ),
+             this, activate( const QModelIndex& ) );
+    CONNECT( thumbView->header(), customContextMenuRequested( const QPoint & ),
+             this, popupSelectColumn( QPoint ) );
+    CONNECT( thumbView, customContextMenuRequested( const QPoint & ),
+             this, popupPlView( const QPoint & ) );
+    thumbView->installEventFilter( this );
+    thumbView->viewport()->installEventFilter( this );
+
+    /* Override the title-column delegate. setItemDelegateForColumn
+     * takes precedence over setItemDelegate (called inside PlTreeView's
+     * ctor) for that one column. */
+    thumbView->setItemDelegateForColumn(
+        VLCModel::metaToColumn( COLUMN_TITLE ),
+        new PlThumbViewItemDelegate( thumbView, p_intf ) );
+
+    /* The Location column (long path strings) also benefits from
+     * wrapping inside its current width — but row height is capped
+     * at the thumbnail height, so a long path wraps onto multiple
+     * lines and any overflow is clipped rather than expanding the
+     * row beyond the thumbnail. */
+    thumbView->setItemDelegateForColumn(
+        VLCModel::metaToColumn( COLUMN_URI ),
+        new PlThumbCappedTextDelegate( thumbView, p_intf ) );
+
+    /* Restore the saved header state if we have one. This preserves
+     * the user's column visibility, order, and widths across launches.
+     * On first run (or after a settings reset) we fall back to a sane
+     * default layout: the same hidden-column set as Detailed List, with
+     * the Title column pre-sized to fit the configured thumbnail. */
+    if( getSettings()->contains( "Playlist/thumbHeaderStateV2" ) )
+    {
+        thumbView->header()->restoreState( getSettings()
+                ->value( "Playlist/thumbHeaderStateV2" ).toByteArray() );
+        if( model->rowCount() )
+            thumbView->header()->setSortIndicator( -1, Qt::AscendingOrder );
+    }
+    else
+    {
+        const int titleColW = var_InheritInteger( p_intf, "qt-pl-thumb-width" ) + 220;
+        for( int m = 1, c = 0; m != COLUMN_END; m <<= 1, c++ )
+        {
+            thumbView->setColumnHidden( c, !( m & COLUMN_DEFAULT ) );
+            if( m == COLUMN_TITLE )
+                thumbView->header()->resizeSection( c, titleColW );
+            else if( m == COLUMN_DURATION )
+                thumbView->header()->resizeSection( c, 80 );
+        }
+    }
+
+    /* Per-row height varies by the configured thumbnail size, so
+     * uniform-row-heights would lock us to a stale value if the user
+     * tweaks the preference. */
+    thumbView->setUniformRowHeights( false );
+
+    /* View-level wordWrap is intentionally OFF so non-(title/location)
+     * columns continue to elide single-line and don't push the row
+     * height up. Title and Location have their own capped-wrap
+     * delegates that wrap within column width but cap the row height
+     * at the thumbnail height. */
+
+    applyJumpScrollStyle( thumbView );
+    viewStack->addWidget( thumbView );
 }
 
 void StandardPLPanel::createTreeView()
@@ -673,11 +872,7 @@ void StandardPLPanel::createTreeView()
     treeView->installEventFilter( this );
     treeView->viewport()->installEventFilter( this );
 
-    /* SignalMapper for columns */
-    selectColumnsSigMapper = new QSignalMapper( this );
-    CONNECT( selectColumnsSigMapper, mapped( int ),
-             this, toggleColumnShown( int ) );
-
+    applyJumpScrollStyle( treeView );
     viewStack->addWidget( treeView );
 }
 
@@ -716,6 +911,13 @@ void StandardPLPanel::showView( int i_view )
         if( picFlowView == NULL )
             createCoverView();
         currentView = picFlowView;
+        break;
+    }
+    case THUMBNAIL_VIEW:
+    {
+        if( thumbView == NULL )
+            createThumbnailView();
+        currentView = thumbView;
         break;
     }
     default:
@@ -789,6 +991,8 @@ int StandardPLPanel::currentViewIndex() const
         return ICON_VIEW;
     else if( currentView == listView )
         return LIST_VIEW;
+    else if( currentView == thumbView )
+        return THUMBNAIL_VIEW;
     else
         return PICTUREFLOW_VIEW;
 }
@@ -800,6 +1004,8 @@ void StandardPLPanel::cycleViews()
     else if( currentView == treeView )
         showView( LIST_VIEW );
     else if( currentView == listView )
+        showView( THUMBNAIL_VIEW );
+    else if( currentView == thumbView )
 #ifndef NDEBUG
         showView( PICTUREFLOW_VIEW  );
     else if( currentView == picFlowView )
@@ -816,7 +1022,8 @@ void StandardPLPanel::activate( const QModelIndex &index )
         /* If we are not a leaf node */
         if( !index.data( VLCModelSubInterface::LEAF_NODE_ROLE ).toBool() )
         {
-            if( currentView != treeView )
+            /* tree-style views expand in place; flat views browse-into. */
+            if( currentView != treeView && currentView != thumbView )
                 browseInto( index );
         }
         else
@@ -843,6 +1050,8 @@ void StandardPLPanel::browseInto( int i_pl_item_id )
 
     if( currentView == treeView )
         treeView->setExpanded( index, true );
+    else if( currentView == thumbView )
+        thumbView->setExpanded( index, true );
     else
         browseInto( index );
 

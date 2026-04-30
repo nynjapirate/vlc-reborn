@@ -25,6 +25,7 @@
 #include "components/playlist/vlc_model.hpp"      /* VLCModel */
 #include "components/playlist/sorting.h"          /* Columns List */
 #include "input_manager.hpp"                      /* THEMIM */
+#include "util/playlist_thumbnail_manager.hpp"    /* PlaylistThumbnailManager */
 
 #include <QPainter>
 #include <QPainterPath>
@@ -293,6 +294,189 @@ void CellPixmapDelegate::paint( QPainter * painter, const QStyleOptionViewItem &
     painter->drawPixmap( option.rect.topLeft(),
                          pixmap.scaled( option.rect.size(), Qt::KeepAspectRatio ) );
 }
+
+/*****************************************************************************
+ * PlThumbViewItemDelegate (Thumbnail List view)
+ *****************************************************************************/
+
+#define THUMB_PADDING  4
+
+PlThumbViewItemDelegate::PlThumbViewItemDelegate( QAbstractItemView *view,
+                                                  intf_thread_t *intf )
+    : PlTreeViewItemDelegate( view )
+    , m_view( view )
+    , m_intf( intf )
+{
+    /* When a thumbnail finishes generating, the manager emits with the
+     * URI. We invalidate the corresponding row by repainting the
+     * viewport — full row scan is cheap relative to a decode. */
+    connect( PlaylistThumbnailManager::instance(),
+             SIGNAL( thumbnailReady( const QString & ) ),
+             this, SLOT( onThumbnailReady( const QString & ) ) );
+}
+
+int PlThumbViewItemDelegate::currentWidth() const
+{
+    int w = static_cast<int>( var_InheritInteger( m_intf, "qt-pl-thumb-width" ) );
+    if ( w < 80 )  w = 80;
+    if ( w > 480 ) w = 480;
+    return w;
+}
+
+void PlThumbViewItemDelegate::onThumbnailReady( const QString & )
+{
+    /* Cheap brute-force repaint. The view has at most a couple hundred
+     * visible rows; scanning to find the one row matching this URI
+     * would mean walking the model for a tiny win. */
+    if ( m_view && m_view->viewport() )
+        m_view->viewport()->update();
+}
+
+void PlThumbViewItemDelegate::paint( QPainter * painter,
+                                     const QStyleOptionViewItem & option,
+                                     const QModelIndex & index ) const
+{
+    /* Draw the row's selection/current-item background using the same
+     * helper the other delegates use, so highlight feels consistent. */
+    paintBackground( painter, option, index );
+
+    const int targetW = currentWidth();
+    const QString title = VLCModel::getMeta( index, COLUMN_TITLE );
+    /* Raw URI (e.g. file:///foo%20bar.mp4), not the human-readable
+     * path the URI column now displays — the thumbnail manager keys
+     * its cache on URI and resolves the path internally via
+     * vlc_uri2path. */
+    QString uri;
+    if ( const VLCModel *m = qobject_cast<const VLCModel *>( index.model() ) )
+        uri = m->getURI( index );
+
+    QImage img;
+    if ( !uri.isEmpty() )
+    {
+        img = PlaylistThumbnailManager::instance()->cachedFor( uri );
+        if ( img.isNull() )
+        {
+            /* Schedule async generation. We don't want to block the
+             * paint event; the manager emits thumbnailReady when the
+             * worker thread finishes, which triggers a viewport
+             * repaint. The next paint will hit the cache. */
+            PlaylistThumbnailManager::instance()->requestAsync( uri, targetW );
+        }
+    }
+
+    painter->save();
+
+    QFont f( index.data( Qt::FontRole ).value<QFont>() );
+    f.setBold( index.data( VLCModel::CURRENT_ITEM_ROLE ).toBool() );
+    painter->setFont( f );
+    if ( option.state & QStyle::State_Selected )
+        painter->setPen( option.palette.color( QPalette::HighlightedText ) );
+
+    QRect cellRect = option.rect;
+    QRect thumbRect( cellRect.left() + THUMB_PADDING,
+                     cellRect.top()  + THUMB_PADDING,
+                     targetW,
+                     cellRect.height() - 2 * THUMB_PADDING );
+
+    if ( !img.isNull() )
+    {
+        /* Letterbox the (aspect-correct) decoded thumbnail inside the
+         * fixed-width slot so the title text stays at a consistent x
+         * across rows regardless of source aspect ratio. */
+        QImage scaled = img.scaled( thumbRect.size(),
+                                    Qt::KeepAspectRatio,
+                                    Qt::SmoothTransformation );
+        QRect drawRect = scaled.rect();
+        drawRect.moveCenter( thumbRect.center() );
+        painter->drawImage( drawRect.topLeft(), scaled );
+    }
+    else
+    {
+        /* Subtle placeholder so the row geometry is stable while the
+         * worker is still decoding. */
+        painter->save();
+        painter->setBrush( option.palette.color( QPalette::Mid ).darker( 110 ) );
+        painter->setPen( option.palette.color( QPalette::Mid ).darker( 130 ) );
+        painter->drawRect( thumbRect );
+        painter->restore();
+    }
+
+    /* Title text wraps inside the available width to the right of the
+     * thumbnail. The row's height grows when the title wraps to multiple
+     * lines (sizeHint returns max(thumb_h, wrapped_text_h)). */
+    QRect textRect = cellRect.adjusted( targetW + 2 * THUMB_PADDING + 4,
+                                        0, -4, 0 );
+    painter->drawText( textRect,
+                       Qt::AlignVCenter | Qt::AlignLeft | Qt::TextWordWrap,
+                       title );
+
+    painter->restore();
+}
+
+QSize PlThumbViewItemDelegate::sizeHint( const QStyleOptionViewItem & option,
+                                         const QModelIndex & /*index*/ ) const
+{
+    /* Row height is fixed at the thumbnail's height (plus padding).
+     * The title text wraps inside the available band and any overflow
+     * is clipped by paint() — preferring uniform compact rows over
+     * tall rows that waste vertical space next to the thumbnail. */
+    const int targetW = currentWidth();
+    return QSize( option.rect.width(),
+                  ( targetW * 9 / 16 ) + 2 * THUMB_PADDING );
+}
+
+/*****************************************************************************
+ * PlThumbCappedTextDelegate (non-title columns in Thumbnail List)
+ *****************************************************************************/
+
+PlThumbCappedTextDelegate::PlThumbCappedTextDelegate( QWidget *parent,
+                                                      intf_thread_t *intf )
+    : PlTreeViewItemDelegate( parent )
+    , m_intf( intf )
+{}
+
+int PlThumbCappedTextDelegate::rowCapHeight() const
+{
+    int w = static_cast<int>( var_InheritInteger( m_intf, "qt-pl-thumb-width" ) );
+    if ( w < 80 )  w = 80;
+    if ( w > 480 ) w = 480;
+    return ( w * 9 / 16 ) + 2 * THUMB_PADDING;
+}
+
+QSize PlThumbCappedTextDelegate::sizeHint( const QStyleOptionViewItem & option,
+                                           const QModelIndex & /*index*/ ) const
+{
+    return QSize( option.rect.width(), rowCapHeight() );
+}
+
+void PlThumbCappedTextDelegate::paint( QPainter * painter,
+                                       const QStyleOptionViewItem & option,
+                                       const QModelIndex & index ) const
+{
+    paintBackground( painter, option, index );
+
+    const QString text = index.data( Qt::DisplayRole ).toString();
+    if ( text.isEmpty() )
+        return;
+
+    painter->save();
+    QFont f( index.data( Qt::FontRole ).value<QFont>() );
+    f.setBold( index.data( VLCModel::CURRENT_ITEM_ROLE ).toBool() );
+    painter->setFont( f );
+    if ( option.state & QStyle::State_Selected )
+        painter->setPen( option.palette.color( QPalette::HighlightedText ) );
+
+    /* Clip to the cell so wrapped lines that overflow the row's
+     * capped height get cut off cleanly instead of bleeding into the
+     * next row. */
+    painter->setClipRect( option.rect );
+    QRect textRect = option.rect.adjusted( 4, 2, -4, -2 );
+    painter->drawText( textRect,
+                       Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap,
+                       text );
+    painter->restore();
+}
+
 
 static inline void plViewStartDrag( QAbstractItemView *view, const Qt::DropActions & supportedActions )
 {

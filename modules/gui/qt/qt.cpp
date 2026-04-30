@@ -201,6 +201,10 @@ static void ShowDialog   ( intf_thread_t *, int, int, intf_dialog_args_t * );
     "to preserve aspect ratio. Smaller is faster; larger is more readable." )
 #define HOVER_THUMB_QUALITY_TEXT N_( "Hover thumbnail quality (0=worst, 10=best)" )
 
+#define PL_THUMB_WIDTH_TEXT N_( "Playlist thumbnail width (px)" )
+#define PL_THUMB_WIDTH_LONGTEXT N_( "Width in pixels of the per-row thumbnail in the playlist's "\
+    "Thumbnail List view. Height scales to preserve aspect ratio." )
+
 static const int i_notification_list[] =
     { NOTIFICATION_NEVER, NOTIFICATION_MINIMIZED, NOTIFICATION_ALWAYS };
 
@@ -335,6 +339,8 @@ vlc_module_begin ()
               HOVER_THUMB_WIDTH_TEXT, HOVER_THUMB_WIDTH_LONGTEXT, false )
     add_integer_with_range( "qt-hover-thumb-quality", 6, 0, 10,
               HOVER_THUMB_QUALITY_TEXT, HOVER_THUMB_QUALITY_TEXT, true )
+    add_integer_with_range( "qt-pl-thumb-width", 160, 80, 480,
+              PL_THUMB_WIDTH_TEXT, PL_THUMB_WIDTH_LONGTEXT, false )
 
     cannot_unload_broken_library()
 

@@ -82,6 +82,54 @@ public:
     void paint ( QPainter * painter, const QStyleOptionViewItem & option, const QModelIndex & index ) const Q_DECL_OVERRIDE;
 };
 
+/* Used only by the THUMBNAIL_VIEW (a QTreeView identical to the
+ * Detailed List except the title column is augmented with a per-row
+ * video thumbnail). The delegate paints a thumbnail to the left of the
+ * title text when one is cached for the row's URI; otherwise it paints
+ * a placeholder and triggers an async generation via
+ * PlaylistThumbnailManager. Row height is clamped at the thumbnail
+ * height; the title text wraps inside the available text band and any
+ * overflow is clipped — this keeps rows uniform-tall regardless of
+ * title length. */
+class PlThumbViewItemDelegate : public PlTreeViewItemDelegate
+{
+    Q_OBJECT
+
+public:
+    PlThumbViewItemDelegate( QAbstractItemView *view, intf_thread_t *intf );
+    void paint ( QPainter *, const QStyleOptionViewItem &, const QModelIndex & ) const Q_DECL_OVERRIDE;
+    QSize sizeHint( const QStyleOptionViewItem &, const QModelIndex & ) const Q_DECL_OVERRIDE;
+
+private slots:
+    void onThumbnailReady( const QString &uri );
+
+private:
+    int currentWidth() const;          /* var_InheritInteger qt-pl-thumb-width, clamped */
+
+    QAbstractItemView *m_view;         /* for invalidating row geometry on ready */
+    intf_thread_t *m_intf;
+};
+
+/* Wrap-with-cap text delegate for non-title columns in the Thumbnail
+ * List view. Wraps text inside the column's current width (so a
+ * long path-style Location string flows onto multiple lines instead
+ * of forcing the column wide), but clips the row height at the
+ * thumbnail height so a very long string doesn't expand the whole
+ * row beyond the thumbnail. */
+class PlThumbCappedTextDelegate : public PlTreeViewItemDelegate
+{
+    Q_OBJECT
+
+public:
+    PlThumbCappedTextDelegate( QWidget *parent, intf_thread_t *intf );
+    void paint ( QPainter *, const QStyleOptionViewItem &, const QModelIndex & ) const Q_DECL_OVERRIDE;
+    QSize sizeHint( const QStyleOptionViewItem &, const QModelIndex & ) const Q_DECL_OVERRIDE;
+
+private:
+    int rowCapHeight() const;
+    intf_thread_t *m_intf;
+};
+
 class PlIconView : public QListView
 {
     Q_OBJECT

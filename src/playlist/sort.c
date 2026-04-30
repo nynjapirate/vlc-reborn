@@ -28,6 +28,8 @@
 
 #include <vlc_common.h>
 #include <vlc_rand.h>
+#include <vlc_url.h>
+#include <sys/stat.h>
 #define  VLC_INTERNAL_PLAYLIST_SORT_FUNCTIONS
 #include "vlc_playlist.h"
 #include "playlist_internal.h"
@@ -345,6 +347,37 @@ SORTFN( SORT_URI, first, second )
     free( psz_first );
     free( psz_second );
     return i_ret;
+}
+
+/* Stat each item's local path (URI → path) and compare on byte size.
+ * Items that can't be stat'd (network URIs, missing files, sub-items
+ * without a local path) are sorted as if they had a smaller size, so
+ * in ascending order they bubble to the top — symmetric with the
+ * meta-string sorts above which return 1 when `first` is null. */
+static inline int64_t playlist_item_local_size( const playlist_item_t *it )
+{
+    char *uri = input_item_GetURI( it->p_input );
+    if( !uri ) return -1;
+    char *path = vlc_uri2path( uri );
+    free( uri );
+    if( !path ) return -1;
+    struct stat st;
+    int rc = stat( path, &st );
+    free( path );
+    if( rc != 0 ) return -1;
+    return (int64_t) st.st_size;
+}
+
+SORTFN( SORT_SIZE, first, second )
+{
+    int64_t s1 = playlist_item_local_size( first );
+    int64_t s2 = playlist_item_local_size( second );
+    /* Mirror meta_sort's null-handling: missing-data sorts first
+     * (i.e. ascending puts unsizable items at the top). */
+    if( s1 < 0 && s2 >= 0 ) return 1;
+    if( s1 >= 0 && s2 < 0 ) return -1;
+    if( s1 == s2 ) return 0;
+    return s1 < s2 ? -1 : 1;
 }
 
 #undef  SORTFN
