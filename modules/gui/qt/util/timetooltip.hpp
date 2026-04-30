@@ -24,6 +24,7 @@
 
 #include "qt.hpp"
 
+#include <QImage>
 #include <QWidget>
 #include <QPainterPath>
 
@@ -33,6 +34,10 @@ class TimeTooltip : public QWidget
 public:
     explicit TimeTooltip( QWidget *parent = 0 );
     void setTip( const QPoint& pos, const QString& time, const QString& text );
+    /* Optional preview frame painted above the text. Pass a null QImage
+     * (or call clearThumbnail) to hide it. The tooltip resizes to fit. */
+    void setThumbnail( const QImage& img );
+    void clearThumbnail();
     virtual void show();
 
 protected:
@@ -46,7 +51,9 @@ private:
     QString mText;
     QString mDisplayedText;
     QFont mFont;
-    QRect mBox;
+    QRect mBox;            /* text-area box (excludes thumbnail) */
+    QRect mThumbBox;       /* thumbnail box (zero-size when no thumbnail) */
+    QImage mThumbnail;
     QPainterPath mPainterPath;
     int mTipX;
 };

@@ -193,6 +193,14 @@ static void ShowDialog   ( intf_thread_t *, int, int, intf_dialog_args_t * );
 
 #define CONTINUE_PLAYBACK_TEXT N_("Continue playback?")
 
+#define HOVER_THUMBS_TEXT N_( "Show preview thumbnails when hovering the seek bar" )
+#define HOVER_THUMBS_LONGTEXT N_( "When enabled, hovering the seek bar shows a small preview frame at " \
+    "the cursor's timestamp. Generated externally via ffmpegthumbnailer." )
+#define HOVER_THUMB_WIDTH_TEXT N_( "Hover thumbnail width (px)" )
+#define HOVER_THUMB_WIDTH_LONGTEXT N_( "Width in pixels of the hover-preview thumbnail. Height scales " \
+    "to preserve aspect ratio. Smaller is faster; larger is more readable." )
+#define HOVER_THUMB_QUALITY_TEXT N_( "Hover thumbnail quality (0=worst, 10=best)" )
+
 static const int i_notification_list[] =
     { NOTIFICATION_NEVER, NOTIFICATION_MINIMIZED, NOTIFICATION_ALWAYS };
 
@@ -316,6 +324,17 @@ vlc_module_begin ()
     add_integer( "qt-auto-raise", MainInterface::RAISE_VIDEO, AUTORAISE_ON_PLAYBACK_TEXT,
                  AUTORAISE_ON_PLAYBACK_LONGTEXT, false )
             change_integer_list( i_raise_list, psz_raise_list_text )
+
+    /* Hover-thumbnail preview on the seek bar (vlc-reborn 3.x backport).
+     * Read by ThumbnailProvider on each request via var_InheritInteger /
+     * var_InheritBool, so changes apply on the next hover without
+     * needing a restart. */
+    add_bool( "qt-hover-thumbnails", true, HOVER_THUMBS_TEXT,
+              HOVER_THUMBS_LONGTEXT, false )
+    add_integer_with_range( "qt-hover-thumb-width", 240, 80, 480,
+              HOVER_THUMB_WIDTH_TEXT, HOVER_THUMB_WIDTH_LONGTEXT, false )
+    add_integer_with_range( "qt-hover-thumb-quality", 6, 0, 10,
+              HOVER_THUMB_QUALITY_TEXT, HOVER_THUMB_QUALITY_TEXT, true )
 
     cannot_unload_broken_library()
 

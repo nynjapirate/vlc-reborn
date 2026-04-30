@@ -46,6 +46,8 @@ class SeekPoints;
 class QPropertyAnimation;
 class QCommonStyle;
 class TimeTooltip;
+class ThumbnailProvider;
+class QImage;
 class QSequentialAnimationGroup;
 
 /* Input Slider derived from QSlider */
@@ -69,6 +71,7 @@ protected:
     void leaveEvent( QEvent * ) Q_DECL_OVERRIDE;
     void hideEvent( QHideEvent * ) Q_DECL_OVERRIDE;
     void paintEvent(QPaintEvent *ev) Q_DECL_OVERRIDE;
+    void contextMenuEvent( QContextMenuEvent *event ) Q_DECL_OVERRIDE;
 
     bool eventFilter( QObject *obj, QEvent *event ) Q_DECL_OVERRIDE;
 
@@ -92,6 +95,8 @@ private:
     char psz_length[MSTRTIME_MAX_SIZE];               /* Used for the ToolTip */
     QTimer *seekLimitTimer;
     TimeTooltip *mTimeTooltip;
+    ThumbnailProvider *mThumbnailProvider;
+    qint64 mHoveredBucketMs;        /* timestamp the user is currently over (bucketed) */
     float f_buffering;
     QTime bufferingStart;
     SeekPoints* chapters;
@@ -128,6 +133,7 @@ private slots:
     void updatePos();
     void inputUpdated( bool );
     void startAnimLoading();
+    void onThumbnailReady( qint64 timeMs, const QImage& img );
 
 signals:
     void sliderDragged( float );

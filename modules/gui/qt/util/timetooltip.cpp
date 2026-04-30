@@ -62,10 +62,24 @@ void TimeTooltip::adjustPosition()
     QFontMetrics metrics( mFont );
     QRect textbox = metrics.boundingRect( mDisplayedText );
     textbox.adjust( -2, -2, 2, 2 );
-    textbox.moveTo( 0, 0 );
 
-    // Resize the widget to fit our needs
-    QSize size( textbox.width() + 1, textbox.height() + TIP_HEIGHT + 1 );
+    // Thumbnail box (zero-size if no thumbnail). Width drives the overall
+    // widget width when wider than the text.
+    QSize thumbSize = mThumbnail.isNull() ? QSize( 0, 0 ) : mThumbnail.size();
+
+    int contentWidth = qMax( textbox.width(), thumbSize.width() );
+    int contentHeight = textbox.height() + thumbSize.height();
+
+    // Stack: thumbnail on top, text box below. Both centered horizontally
+    // inside contentWidth.
+    QRect thumbBox( 0, 0, thumbSize.width(), thumbSize.height() );
+    if ( !mThumbnail.isNull() )
+        thumbBox.moveLeft( ( contentWidth - thumbSize.width() ) / 2 );
+
+    textbox.moveTo( ( contentWidth - textbox.width() ) / 2, thumbSize.height() );
+
+    // Resize the widget to fit our needs (width, height + tip pointer + 1px slack)
+    QSize size( contentWidth + 1, contentHeight + TIP_HEIGHT + 1 );
 
     // The desired label position is just above the target
     QPoint position( mTarget.x() - size.width() / 2,
@@ -85,9 +99,10 @@ void TimeTooltip::adjustPosition()
     move( position );
 
     int tipX = mTarget.x() - position.x();
-    if( mBox != textbox || mTipX != tipX )
+    if( mBox != textbox || mThumbBox != thumbBox || mTipX != tipX )
     {
         mBox = textbox;
+        mThumbBox = thumbBox;
         mTipX = tipX;
 
         resize( size );
@@ -100,15 +115,18 @@ void TimeTooltip::buildPath()
     // Prepare the painter path for future use so
     // we only have to generate the text at runtime.
 
-    // Draw the text box
+    // Background = thumbnail box (when present) + text box
     mPainterPath = QPainterPath();
+    if ( !mThumbnail.isNull() )
+        mPainterPath.addRect( mThumbBox );
     mPainterPath.addRect( mBox );
 
-    // Draw the tip
+    // Tip pointer hangs off the bottom of the text box
+    int bottomY = mBox.bottom() + 1;
     QPolygonF polygon;
-    polygon << QPoint( qMax( 0, mTipX - 3 ), mBox.height() )
-            << QPoint( mTipX, mBox.height() + TIP_HEIGHT )
-            << QPoint( qMin( mTipX + 3, mBox.width() ), mBox.height() );
+    polygon << QPoint( qMax( mBox.left(), mTipX - 3 ), bottomY )
+            << QPoint( mTipX, bottomY + TIP_HEIGHT )
+            << QPoint( qMin( mTipX + 3, mBox.right() + 1 ), bottomY );
     mPainterPath.addPolygon( polygon );
 
     // Store the simplified version of the path
@@ -133,6 +151,27 @@ void TimeTooltip::setTip( const QPoint& target, const QString& time, const QStri
     raise();
 }
 
+void TimeTooltip::setThumbnail( const QImage& img )
+{
+    if ( img.isNull() )
+    {
+        clearThumbnail();
+        return;
+    }
+    mThumbnail = img;
+    adjustPosition();
+    update();
+}
+
+void TimeTooltip::clearThumbnail()
+{
+    if ( mThumbnail.isNull() )
+        return;
+    mThumbnail = QImage();
+    adjustPosition();
+    update();
+}
+
 void TimeTooltip::show()
 {
     setVisible( true );
@@ -147,6 +186,9 @@ void TimeTooltip::paintEvent( QPaintEvent * )
     p.setPen( Qt::black );
     p.setBrush( qApp->palette().base() );
     p.drawPath( mPainterPath );
+
+    if ( !mThumbnail.isNull() )
+        p.drawImage( mThumbBox, mThumbnail );
 
     p.setFont( mFont );
     p.setPen( QPen( qApp->palette().text(), 1 ) );

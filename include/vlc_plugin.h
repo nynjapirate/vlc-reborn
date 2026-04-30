@@ -188,8 +188,12 @@ enum vlc_module_properties
 /**
  * Current plugin ABI version
  */
-# define MODULE_SYMBOL 3_0_0f
-# define MODULE_SUFFIX "__3_0_0f"
+/* vlc-reborn: matched to Ubuntu 24.04's "t64" ABI suffix so stock-VLC
+ * third-party plugins (pause_click etc.) installed via apt are loadable
+ * by our libvlccore. Without this, our libvlccore looks for
+ * "vlc_entry__3_0_0f" but Ubuntu plugins export "vlc_entry__3_0_0ft64". */
+# define MODULE_SYMBOL 3_0_0ft64
+# define MODULE_SUFFIX "__3_0_0ft64"
 
 /*****************************************************************************
  * Add a few defines. You do not want to read this section. Really.

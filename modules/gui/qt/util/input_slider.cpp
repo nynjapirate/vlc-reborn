@@ -31,11 +31,13 @@
 
 #include "util/input_slider.hpp"
 #include "util/timetooltip.hpp"
+#include "util/thumbnail_provider.hpp"
 #include "adapters/seekpoints.hpp"
 #include "input_manager.hpp"
 #include "imagehelper.hpp"
 
 #include <QPaintEvent>
+#include <QPointer>
 #include <QPainter>
 #include <QBitmap>
 #include <QStyleOptionSlider>
@@ -49,7 +51,9 @@
 #include <QPoint>
 #include <QPropertyAnimation>
 #include <QApplication>
+#include <QContextMenuEvent>
 #include <QDebug>
+#include <QMenu>
 #include <QScreen>
 #include <QSequentialAnimationGroup>
 
@@ -114,6 +118,19 @@ SeekSlider::SeekSlider( intf_thread_t *p_intf, Qt::Orientation q, QWidget *_pare
     mTimeTooltip = new TimeTooltip( NULL );
     mTimeTooltip->setMouseTracking( true );
 
+    /* Hover-thumbnail provider — SHARED across SeekSlider instances. VLC's
+     * Qt UI creates multiple SeekSliders (main controls bar + fullscreen
+     * controller); without sharing, each would spawn its own mpv worker
+     * on every input change. Use a process-wide singleton parented to the
+     * QApplication so it survives across SeekSlider lifecycles. */
+    static QPointer<ThumbnailProvider> s_sharedProvider;
+    if ( s_sharedProvider.isNull() )
+        s_sharedProvider = new ThumbnailProvider( p_intf, qApp );
+    mThumbnailProvider = s_sharedProvider;
+    mHoveredBucketMs = -1;
+    CONNECT( mThumbnailProvider, thumbnailReady( qint64, const QImage& ),
+             this, onThumbnailReady( qint64, const QImage& ) );
+
     /* Properties */
     setRange( MIN_SLIDER_VALUE, MAX_SLIDER_VALUE );
     setSingleStep( 2 );
@@ -164,6 +181,8 @@ SeekSlider::SeekSlider( intf_thread_t *p_intf, Qt::Orientation q, QWidget *_pare
     startAnimLoadingTimer->setInterval( 500 );
 
     CONNECT( MainInputManager::getInstance(), inputChanged( bool ), this , inputUpdated( bool ) );
+    CONNECT( MainInputManager::getInstance(), inputChanged( bool ),
+             mThumbnailProvider, onInputChanged() );
     CONNECT( this, sliderMoved( int ), this, startSeekTimer() );
     CONNECT( seekLimitTimer, timeout(), this, updatePos() );
     CONNECT( hideHandleTimer, timeout(), this, hideHandle() );
@@ -224,6 +243,13 @@ void SeekSlider::setPosition( float pos, int64_t time, int length )
     }
 
     inputLength = length;
+
+    /* Seed the hover-thumbnail provider with this duration so it can
+     * pre-warm its cache with evenly-spaced thumbnails. seedWarmup is
+     * idempotent — calling it on every position update is fine; it
+     * only acts the first time the length stabilizes for this media. */
+    if ( length > 0 && mThumbnailProvider )
+        mThumbnailProvider->seedWarmup( static_cast<qint64>(length) * 1000 );
 }
 
 void SeekSlider::startSeekTimer()
@@ -391,6 +417,23 @@ void SeekSlider::mouseMoveEvent( QMouseEvent *event )
         if( likely( size().width() > handleLength() ) ) {
             secstotimestr( psz_length, getValuePercentageFromXPos( event->x() ) * inputLength );
             mTimeTooltip->setTip( target, psz_length, chapterLabel );
+
+            /* Request a hover-thumbnail for this position, bucketed so
+             * cursor wiggles don't fork-bomb ffmpeg. Bucket size is
+             * duration/200 floored to >=250ms. */
+            const qint64 hoveredMs = static_cast<qint64>(
+                getValuePercentageFromXPos( event->x() ) * inputLength * 1000.0 );
+            const qint64 bucketMs = qMax<qint64>( 250, inputLength * 1000 / 200 );
+            const qint64 bucketed = ( hoveredMs / bucketMs ) * bucketMs;
+            if ( bucketed != mHoveredBucketMs )
+            {
+                mHoveredBucketMs = bucketed;
+                /* Drop any stale thumbnail until the new one arrives —
+                 * showing a wrong frame at the new position is worse
+                 * than briefly showing none. */
+                mTimeTooltip->clearThumbnail();
+                mThumbnailProvider->requestThumbnail( bucketed );
+            }
         }
     }
     event->accept();
@@ -441,7 +484,19 @@ void SeekSlider::leaveEvent( QEvent * )
       ( !isActiveWindow() && !mTimeTooltip->isActiveWindow() ) )
     {
         mTimeTooltip->hide();
+        mTimeTooltip->clearThumbnail();
+        mHoveredBucketMs = -1;
     }
+}
+
+void SeekSlider::onThumbnailReady( qint64 timeMs, const QImage& img )
+{
+    /* Race-window check: the user may have moved on to a different
+     * timestamp (or media) before this thumbnail finished. Drop it if
+     * it's no longer relevant. */
+    if ( timeMs != mHoveredBucketMs )
+        return;
+    mTimeTooltip->setThumbnail( img );
 }
 
 void SeekSlider::paintEvent( QPaintEvent *ev )
@@ -475,6 +530,105 @@ void SeekSlider::paintEvent( QPaintEvent *ev )
 void SeekSlider::hideEvent( QHideEvent * )
 {
     mTimeTooltip->hide();
+    mTimeTooltip->clearThumbnail();
+    mHoveredBucketMs = -1;
+}
+
+void SeekSlider::contextMenuEvent( QContextMenuEvent *event )
+{
+    /* Right-click on the seek bar opens a quick-toggle menu for the
+     * hover-thumbnail feature. Same options live in Tools > Preferences;
+     * this is just a faster path for the user who's already on the bar. */
+    QMenu menu( this );
+
+    /* Hide any visible tooltip while the menu is up — otherwise the
+     * floating popup overlaps the menu items. */
+    mTimeTooltip->hide();
+    mTimeTooltip->clearThumbnail();
+
+    QAction *header = menu.addAction( tr("Hover Thumbnails") );
+    header->setEnabled( false );
+    menu.addSeparator();
+
+    bool enabled = var_InheritBool( p_intf, "qt-hover-thumbnails" );
+    QAction *toggle = menu.addAction( tr("Show on hover") );
+    toggle->setCheckable( true );
+    toggle->setChecked( enabled );
+
+    /* Size submenu */
+    QMenu *sizeMenu = menu.addMenu( tr("Size") );
+    int currentWidth = static_cast<int>( var_InheritInteger( p_intf, "qt-hover-thumb-width" ) );
+    struct { const char *label; int width; } sizes[] = {
+        { "Small (160 px)",  160 },
+        { "Medium (240 px)", 240 },
+        { "Large (320 px)",  320 },
+        { "XL (480 px)",     480 },
+    };
+    QActionGroup *sizeGroup = new QActionGroup( &menu );
+    for ( const auto &s : sizes )
+    {
+        QAction *a = sizeMenu->addAction( tr(s.label) );
+        a->setCheckable( true );
+        a->setChecked( currentWidth == s.width );
+        a->setData( s.width );
+        sizeGroup->addAction( a );
+    }
+
+    /* Quality submenu */
+    QMenu *qualityMenu = menu.addMenu( tr("Quality") );
+    int currentQ = static_cast<int>( var_InheritInteger( p_intf, "qt-hover-thumb-quality" ) );
+    struct { const char *label; int q; } qualities[] = {
+        { "Low (3)",     3 },
+        { "Medium (6)",  6 },
+        { "High (9)",    9 },
+    };
+    QActionGroup *qGroup = new QActionGroup( &menu );
+    for ( const auto &q : qualities )
+    {
+        QAction *a = qualityMenu->addAction( tr(q.label) );
+        a->setCheckable( true );
+        a->setChecked( currentQ == q.q );
+        a->setData( q.q );
+        qGroup->addAction( a );
+    }
+
+    /* Pop the menu and act on whatever the user picked. */
+    QAction *picked = menu.exec( event->globalPos() );
+    bool changed = false;
+    if ( picked == toggle )
+    {
+        bool nv = !enabled;
+        var_SetBool( p_intf->obj.libvlc, "qt-hover-thumbnails", nv );
+        config_PutInt( p_intf, "qt-hover-thumbnails", nv ? 1 : 0 );
+        changed = true;
+    }
+    else if ( picked && sizeGroup->actions().contains( picked ) )
+    {
+        int w = picked->data().toInt();
+        var_SetInteger( p_intf->obj.libvlc, "qt-hover-thumb-width", w );
+        config_PutInt( p_intf, "qt-hover-thumb-width", w );
+        changed = true;
+    }
+    else if ( picked && qGroup->actions().contains( picked ) )
+    {
+        int qv = picked->data().toInt();
+        var_SetInteger( p_intf->obj.libvlc, "qt-hover-thumb-quality", qv );
+        config_PutInt( p_intf, "qt-hover-thumb-quality", qv );
+        changed = true;
+    }
+    /* else: user closed the menu without picking anything */
+
+    if ( changed )
+    {
+        /* Cached thumbnails are at the old size/quality — drop them so
+         * the next hover regenerates at the new settings. mHoveredBucketMs
+         * reset forces mouseMoveEvent to issue a fresh request even if
+         * the cursor lands back on the same bucket it was on before. */
+        mThumbnailProvider->clearCache();
+        mHoveredBucketMs = -1;
+    }
+
+    event->accept();
 }
 
 bool SeekSlider::eventFilter( QObject *obj, QEvent *event )
