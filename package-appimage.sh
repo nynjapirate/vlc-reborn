@@ -163,9 +163,20 @@ cat > "$APPDIR/AppRun" <<'APPRUN'
 #!/bin/bash
 HERE="$(dirname "$(readlink -f "$0")")"
 
-# Plugin discovery. VLC checks VLC_PLUGIN_PATH first, then a hardcoded
-# build-time path; we override here so the AppImage is fully self-contained.
-export VLC_PLUGIN_PATH="$HERE/usr/lib/vlc/plugins"
+# libvlccore's config_GetLibDir() auto-derives the plugin path from
+# wherever libvlccore.so was actually dlopen'd; we pin
+# LD_LIBRARY_PATH below so that's $HERE/usr/lib, which yields a
+# plugin path of $HERE/usr/lib/vlc/plugins — exactly where our
+# bundled plugins are. Setting VLC_PLUGIN_PATH explicitly to the
+# same dir would cause every plugin to register twice (libvlccore
+# adds both the auto-derived path AND VLC_PLUGIN_PATH), so we leave
+# VLC_PLUGIN_PATH empty.
+#
+# The empty string still counts as "set" — that prevents bin/vlc.c's
+# dev-mode setenv() (overwrite=0 in our patched bin/vlc.c) from
+# injecting the developer's TOP_BUILDDIR/modules path which would
+# leak the source tree into the AppImage.
+export VLC_PLUGIN_PATH=""
 export VLC_DATA_PATH="$HERE/usr/share/vlc"
 
 # Library path — bundled libavformat / libavcodec / Qt5 / libvlccore live

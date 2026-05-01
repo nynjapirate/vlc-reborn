@@ -122,17 +122,23 @@ done
 cat > "$PKG/usr/bin/vlc-reborn" <<'WRAPPER'
 #!/bin/bash
 HERE=/opt/vlc-reborn
-# Self-contained plugin path. We deliberately do NOT add stock VLC's
-# /usr/lib/x86_64-linux-gnu/vlc/plugins here: stock VLC and our build
-# both ship most of the same plugins (libavcodec, libxml, libqt_plugin,
-# ...), so chaining the two paths causes every module to register
-# twice and every config option shows up twice in the Preferences UI.
-# Users who want a third-party plugin (e.g. pause_click) should copy
-# its single .so into /opt/vlc-reborn/lib/vlc/plugins/ and re-run
-# `vlc-cache-gen /opt/vlc-reborn/lib/vlc/plugins`.
-export VLC_PLUGIN_PATH="$HERE/lib/vlc/plugins"
+# We pin LD_LIBRARY_PATH to /opt/vlc-reborn/lib so the dynamic loader
+# picks our patched libvlccore.so.9 over any stock-VLC copy.
+# libvlccore's config_GetLibDir() then auto-derives the plugin path
+# from where libvlccore was loaded — i.e. /opt/vlc-reborn/lib/vlc/plugins
+# — so we don't need (and don't want) to also set VLC_PLUGIN_PATH:
+# adding the same path twice causes every plugin to load twice and
+# every config option to duplicate in the Preferences UI.
+#
+# We DO set VLC_PLUGIN_PATH to an explicit empty string. That defeats
+# bin/vlc.c's dev-mode setenv() which would otherwise inject the
+# original build-tree path baked in at compile time
+# (TOP_BUILDDIR/modules), leaking the developer's source tree into
+# every installed copy. The empty string is "set" as far as the
+# overwrite=0 check in bin/vlc.c is concerned, so the dev path never
+# gets injected.
+export VLC_PLUGIN_PATH=""
 export VLC_DATA_PATH="$HERE/share/vlc"
-# Prepend so OUR libvlccore.so.9 wins over /usr/lib's stock-VLC copy.
 export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 exec "$HERE/bin/vlc" "$@"
 WRAPPER

@@ -131,8 +131,17 @@ int main( int i_argc, const char *ppsz_argv[] )
 #endif
 
 #ifdef TOP_BUILDDIR
-    setenv ("VLC_PLUGIN_PATH", TOP_BUILDDIR"/modules", 1);
-    setenv ("VLC_DATA_PATH", TOP_SRCDIR"/share", 1);
+    /* vlc-reborn change: 1 → 0 so an explicitly-set VLC_PLUGIN_PATH (from
+     * the .deb / AppImage wrappers, which point at a self-contained
+     * /opt/vlc-reborn/lib/vlc/plugins) is honoured. The dev-mode
+     * convenience of pointing back at the source tree's modules/ still
+     * works when VLC_PLUGIN_PATH is unset in env. Without this, the
+     * binary would always overwrite the wrapper's setting and leak the
+     * source-tree path into installed packages — leading to plugins
+     * being loaded from BOTH /opt and the original build tree, with
+     * settings duplicating in the Preferences UI. */
+    setenv ("VLC_PLUGIN_PATH", TOP_BUILDDIR"/modules", 0);
+    setenv ("VLC_DATA_PATH", TOP_SRCDIR"/share", 0);
 #endif
 
     /* Clear the X.Org startup notification ID. Otherwise the UI might try to
