@@ -91,8 +91,13 @@ mkdir -p "$APPDIR/usr/bin" \
 install -m 755 "$HERE/bin/vlc-static" "$APPDIR/usr/bin/vlc"
 # vlc-cache-gen creates the plugin cache index on first launch — bundle it
 # so first-run is fast (otherwise vlc scans every plugin .so for metadata).
-[[ -x "$HERE/bin/vlc-cache-gen" ]] && \
-    install -m 755 "$HERE/bin/vlc-cache-gen" "$APPDIR/usr/bin/vlc-cache-gen"
+# bin/vlc-cache-gen at the top level is a libtool shell wrapper that
+# re-execs bin/.libs/vlc-cache-gen and fails when .libs/ isn't shipped;
+# always copy the real ELF.
+if [[ -x "$HERE/bin/.libs/vlc-cache-gen" ]]; then
+    install -m 755 "$HERE/bin/.libs/vlc-cache-gen" \
+        "$APPDIR/usr/bin/vlc-cache-gen"
+fi
 
 # Versioned core libs — copy the actual file then recreate symlinks
 for so in "$HERE/src/.libs/libvlccore.so.9.0.1" \

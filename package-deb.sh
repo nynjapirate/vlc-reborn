@@ -71,8 +71,13 @@ mkdir -p "$PKG/DEBIAN" \
 
 # 1a. Binary + cache-gen helper
 install -m 755 "$HERE/bin/vlc-static" "$PKG/opt/vlc-reborn/bin/vlc"
-[[ -x "$HERE/bin/vlc-cache-gen" ]] && \
-    install -m 755 "$HERE/bin/vlc-cache-gen" "$PKG/opt/vlc-reborn/bin/vlc-cache-gen"
+# bin/vlc-cache-gen at the top level is a libtool shell wrapper that
+# re-execs the real binary in bin/.libs/vlc-cache-gen and fails when
+# bin/.libs/ isn't present in /opt. Always copy the actual ELF.
+if [[ -x "$HERE/bin/.libs/vlc-cache-gen" ]]; then
+    install -m 755 "$HERE/bin/.libs/vlc-cache-gen" \
+        "$PKG/opt/vlc-reborn/bin/vlc-cache-gen"
+fi
 
 # 1b. Patched libvlccore + libvlc (versioned file + ABI symlinks). vlc-static
 #     links against libvlc.so.5; libvlc loads libvlccore.so.9 transitively.
