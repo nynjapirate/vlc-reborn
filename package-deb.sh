@@ -117,6 +117,14 @@ done
 cat > "$PKG/usr/bin/vlc-reborn" <<'WRAPPER'
 #!/bin/bash
 HERE=/opt/vlc-reborn
+# Self-contained plugin path. We deliberately do NOT add stock VLC's
+# /usr/lib/x86_64-linux-gnu/vlc/plugins here: stock VLC and our build
+# both ship most of the same plugins (libavcodec, libxml, libqt_plugin,
+# ...), so chaining the two paths causes every module to register
+# twice and every config option shows up twice in the Preferences UI.
+# Users who want a third-party plugin (e.g. pause_click) should copy
+# its single .so into /opt/vlc-reborn/lib/vlc/plugins/ and re-run
+# `vlc-cache-gen /opt/vlc-reborn/lib/vlc/plugins`.
 export VLC_PLUGIN_PATH="$HERE/lib/vlc/plugins"
 export VLC_DATA_PATH="$HERE/share/vlc"
 # Prepend so OUR libvlccore.so.9 wins over /usr/lib's stock-VLC copy.
